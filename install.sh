@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
 # Petal: Attack/Defense CTF traffic analyzer. This one script installs, configures and runs it.
+# It takes no arguments.
 #
 #   curl -fsSL https://raw.githubusercontent.com/aimansam/petal/main/install.sh | bash
-#                         clone Petal into ./petal (or update it), then configure, build and start
-#   ./install.sh          inside the petal folder: update, install deps if needed, configure .env
-#                         (interactive), build and start; re-run any time to change settings
-#   ./install.sh -y       same, but accept defaults / existing values without asking
-#   ./install.sh status   containers, pcap count, flow count
-#   ./install.sh logs     follow assembler + capture logs
-#   ./install.sh stop     stop all Petal containers
-#   ./install.sh reset    stop and DELETE the database (pcaps in traffic dir are kept)
-#   ./clean.sh            remove Petal from Docker (separate script, see ./clean.sh --help)
+#                   clone Petal into ./petal (or update it), then configure, build and start
+#   ./install.sh    inside the petal folder: update, install Docker if needed, ask the settings
+#                   (Enter keeps the value shown), write .env, build and start. Re-run it to change
+#                   settings. Without a terminal it uses the defaults / current .env values.
+#   ./clean.sh      remove Petal from Docker
 #
-# Any setting can be preset from the environment, e.g.
-#   SERVICES="web:7001,pwn:7002" CAPTURE_IFACE=eth0 ./install.sh -y
+# Settings can be preset from the environment, e.g.
+#   SERVICES="web:7001,pwn:7002" CAPTURE_IFACE=eth0 ./install.sh
 #   PETAL_DIR=/opt/petal  where the curl one-liner installs (default ./petal)
 #   PETAL_REF=<branch>    branch/tag to install (default main)
 set -euo pipefail
@@ -21,6 +18,10 @@ set -euo pipefail
 # ---------------------------------------------------------------- bootstrap
 # Run from outside a Petal checkout (e.g. curl | bash): clone or update it, then run its install.sh.
 # Inside a checkout: fast-forward to the latest version once, then continue with the setup below.
+if [ $# -gt 0 ]; then
+    printf '\033[1;31m[x]\033[0m %s\n' "install.sh takes no arguments (it asks its questions; to remove Petal use ./clean.sh)" >&2
+    exit 1
+fi
 PETAL_REPO="${PETAL_REPO:-https://github.com/aimansam/petal.git}"
 PETAL_REF="${PETAL_REF:-main}"
 SELF=""
@@ -61,17 +62,16 @@ if [ -z "$SELF_DIR" ] || [ ! -f "$SELF_DIR/docker-compose.yml" ] || [ ! -d "$SEL
     fi
     # When piped (curl | bash) stdin is the script itself; give the questions the terminal.
     if [ ! -t 0 ] && { : </dev/tty; } 2>/dev/null; then
-        PETAL_UPDATED=1 exec "$PETAL_DIR/install.sh" "$@" </dev/tty
+        PETAL_UPDATED=1 exec "$PETAL_DIR/install.sh" </dev/tty
     fi
-    PETAL_UPDATED=1 exec "$PETAL_DIR/install.sh" "$@"
+    PETAL_UPDATED=1 exec "$PETAL_DIR/install.sh"
 fi
 
 cd "$SELF_DIR"
-case "${1:-}" in status|logs|-h|--help|help) PETAL_UPDATED=1 ;; esac   # read-only commands: no update
 if [ -z "${PETAL_UPDATED:-}" ] && [ -d .git ]; then
     if try_update "$SELF_DIR"; then
         bootstrap_say "updated to $(git log -1 --format='%h %s'), restarting"
-        PETAL_UPDATED=1 exec "$SELF" "$@"
+        PETAL_UPDATED=1 exec "$SELF"
     fi
 fi
 
@@ -81,19 +81,11 @@ warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- arguments
-CMD="setup"
+[ $# -eq 0 ] || die "install.sh takes no arguments (it asks its questions; to remove Petal use ./clean.sh)"
 INTERACTIVE=1
-for arg in "$@"; do
-    case "$arg" in
-        -y|--yes) INTERACTIVE=0 ;;
-        -h|--help|help) sed -n '2,/^set /p' "$SELF" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-        setup|status|logs|stop|reset) CMD="$arg" ;;
-        *) die "unknown argument '$arg' (try --help)" ;;
-    esac
-done
 [ -t 0 ] || INTERACTIVE=0
 
-confirm() { # confirm "question"  (always yes in -y mode)
+confirm() { # confirm "question"  (always yes without a terminal)
     [ "$INTERACTIVE" = 0 ] && return 0
     local a; read -r -p "$1 [Y/n] " a || true
     [[ ! "$a" =~ ^[Nn] ]]
@@ -104,7 +96,7 @@ confirm() { # confirm "question"  (always yes in -y mode)
 if [ "$(id -u)" != 0 ] && ! { command -v docker >/dev/null && docker info >/dev/null 2>&1; }; then
     command -v sudo >/dev/null || die "run this script as root (no sudo found)"
     info "root needed for docker, re-running with sudo..."
-    PETAL_UPDATED=1 exec sudo -E "$SELF" "$@"
+    PETAL_UPDATED=1 exec sudo -E "$SELF"
 fi
 
 # Keep files we create owned by the person who ran the script, not root.
@@ -482,7 +474,7 @@ cmd_setup() {
         curl -fs -o /dev/null http://${UI_HOST}:${UI_PORT}/ && break
         sleep 2
     done
-    curl -fs -o /dev/null http://${UI_HOST}:${UI_PORT}/ || warn "frontend not answering yet, check: ./install.sh logs"
+    curl -fs -o /dev/null http://${UI_HOST}:${UI_PORT}/ || warn "frontend not answering yet, check: docker compose logs -f frontend api"
 
     echo
     cmd_status
@@ -496,19 +488,8 @@ cmd_setup() {
     if [ -n "$VPN_RANGES" ]; then ok "Attacker tags src:<ip> only for VPN range(s): $VPN_RANGES"
     else info "Attacker tags src:<ip> for every client IP (set a VPN range to limit them)"; fi
     [ -n "$DOCKER_IFACE" ] && warn "Docker container IPs can change: re-run ./install.sh after recreating the CTF containers"
-    info "Change settings: re-run ./install.sh   |   progress: ./install.sh status"
+    info "Change settings: re-run ./install.sh   |   logs: docker compose logs -f assembler capture   |   remove: ./clean.sh"
 }
 
 
-case "$CMD" in
-    setup)  cmd_setup ;;
-    status) cmd_status ;;
-    logs)   compose logs -f --tail 50 assembler capture ;;
-    stop)   compose down ;;
-    reset)
-        read -r -p "Delete the Petal database volume? Pcaps are kept. [y/N] " a
-        [[ "$a" =~ ^[Yy]$ ]] || exit 0
-        compose down -v
-        ok "database wiped; run ./install.sh to start fresh (existing pcaps will be re-imported)"
-        ;;
-esac
+cmd_setup

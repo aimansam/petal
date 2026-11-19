@@ -15,8 +15,7 @@ Install on a box:
 curl -fsSL https://raw.githubusercontent.com/aimansam/petal/main/install.sh | bash
 ```
 Re-running it (or `./install.sh` inside the `petal` folder) updates Petal and re-runs the setup.
-To remove it from Docker (containers, database, images; pcaps and `.env` are kept): `./clean.sh`
-(`./clean.sh --pcaps` also deletes the captures), then delete the folder.
+To remove it from Docker: `./clean.sh` (it asks before removing anything, and whether to delete the pcaps), then delete the folder.
 
 ## Origins
 Petal is based on Tulip. Tulip was developed by Team Europe for use in the first International Cyber Security Challenge. The project is a fork of [flower](https://github.com/secgroup/flower), but it contains quite some changes:
@@ -55,16 +54,17 @@ The web UI is on port 3000 (`UI_PORT` in `.env`; setup picks a free port if 3000
 Requests that reach a service through a reverse proxy (nginx, a tunnel) are tagged `src:<attacker ip>`, taken from
 `X-Forwarded-For`/`X-Real-IP`/`CF-Connecting-IP` (install.sh trusts only the containers on the services' networks); set `VPN_RANGES` to tag only competition VPN addresses).
 
-```
-./install.sh -y       # non-interactive, keep defaults / current .env values
-./install.sh status   # containers, pcap count, flows in the database
-./install.sh logs     # follow the assembler + capture logs
-./install.sh stop     # stop everything
-./install.sh reset    # wipe the database (pcaps are kept)
-```
+Both scripts take no arguments. Re-run `./install.sh` at any time to change settings; without a terminal it
+keeps the defaults / current `.env` values. Values can be preset from the environment:
+`SERVICES="web:8080,pwn:1337" CAPTURE_IFACE=eth0 ./install.sh`
 
-Re-run `./install.sh` at any time to change settings. Values can be preset from the environment:
-`SERVICES="web:8080,pwn:1337" CAPTURE_IFACE=eth0 ./install.sh -y`
+Day-to-day commands (run in the `petal` folder):
+```
+docker compose ps                          # containers
+docker compose logs -f assembler capture   # follow imports and capture
+docker compose stop                        # stop everything (./install.sh starts it again)
+./clean.sh                                 # remove Petal from Docker (asks first; pcaps optional)
+```
 
 ## Configuration
 Services shown in the UI are set with `SERVICES` in `.env`, as `name:port` (ip = `VM_IP`) or `name:ip:port`, comma separated:
