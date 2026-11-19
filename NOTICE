@@ -5,7 +5,7 @@ Petal is a modified version of Tulip (https://github.com/OpenAttackDefenseTools/
 written by RickdeJager, Bazumo and contributors (Team Europe / OpenAttackDefenseTools),
 which is itself based on flower (https://github.com/secgroup/flower) by secgroup (Ca' Foscari).
 
-Modified by aimansam starting November 2026: renamed to Petal; added setup.sh, the capture
+Modified by aimansam starting November 2026: renamed to Petal; added the install.sh setup, the capture
 container, Docker-hosted service detection and multi-network capture, dashboard IP/port
 selection, and attacker IP (src:<ip>) tagging. The full change history is in the git log.
 

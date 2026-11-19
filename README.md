@@ -3,7 +3,7 @@
 Petal is a flow analyzer for Attack / Defence CTF competitions, ready to run on a vulnbox. It lets players quickly find the traffic hitting their services, spot flags and exploits, and generates python snippets to replay attacks.
 
 Petal is based on [Tulip](https://github.com/OpenAttackDefenseTools/tulip) (see [Credits](#credits)) and adds:
-* `setup.sh`: one-shot install and configuration (Docker, `.env`, build, start)
+* `install.sh`: one script to install, configure, build and run it (Docker, `.env`, updates)
 * Capture container: rotating `tcpdump` on one or more interfaces, flows appear ~1 minute after traffic stops
 * Services running in Docker on the box are picked from a list and resolved to their container IP:port and
   every Docker network they use (traffic through tunnels and reverse proxies is captured too)
@@ -14,7 +14,7 @@ Install on a box:
 ```
 curl -fsSL https://raw.githubusercontent.com/aimansam/petal/main/install.sh | bash
 ```
-Re-running it updates the install and re-runs `./setup.sh`.
+Re-running it (or `./install.sh` inside the `petal` folder) updates Petal and re-runs the setup.
 To remove it from Docker (containers, database, images; pcaps and `.env` are kept): `./clean.sh`
 (`./clean.sh --pcaps` also deletes the captures), then delete the folder.
 
@@ -45,26 +45,26 @@ Petal is based on Tulip. Tulip was developed by Team Europe for use in the first
 
 ```
 git clone https://github.com/aimansam/petal.git && cd petal
-./setup.sh
+./install.sh
 ```
 
-`setup.sh` installs Docker if it is missing (Debian/Ubuntu), asks for your vulnbox IP, services,
+`install.sh` installs Docker if it is missing (Debian/Ubuntu), asks for your vulnbox IP, services,
 capture interface and game timing (sensible defaults are detected), writes `.env`, then builds and starts everything.
 A `capture` container runs `tcpdump` on the host and rotates pcaps into `./traffic`, which Petal imports automatically.
 The web UI is on port 3000 (`UI_PORT` in `.env`; setup picks a free port if 3000 is taken), on all IPs or only the one set in `UI_BIND` (e.g. the competition network IP).
 Requests that reach a service through a reverse proxy (nginx, a tunnel) are tagged `src:<attacker ip>`, taken from
-`X-Forwarded-For`/`X-Real-IP`/`CF-Connecting-IP` (setup.sh trusts only the containers on the services' networks); set `VPN_RANGES` to tag only competition VPN addresses).
+`X-Forwarded-For`/`X-Real-IP`/`CF-Connecting-IP` (install.sh trusts only the containers on the services' networks); set `VPN_RANGES` to tag only competition VPN addresses).
 
 ```
-./setup.sh -y       # non-interactive, keep defaults / current .env values
-./setup.sh status   # containers, pcap count, flows in the database
-./setup.sh logs     # follow the assembler + capture logs
-./setup.sh stop     # stop everything
-./setup.sh reset    # wipe the database (pcaps are kept)
+./install.sh -y       # non-interactive, keep defaults / current .env values
+./install.sh status   # containers, pcap count, flows in the database
+./install.sh logs     # follow the assembler + capture logs
+./install.sh stop     # stop everything
+./install.sh reset    # wipe the database (pcaps are kept)
 ```
 
-Re-run `./setup.sh` at any time to change settings. Values can be preset from the environment:
-`SERVICES="web:8080,pwn:1337" CAPTURE_IFACE=eth0 ./setup.sh -y`
+Re-run `./install.sh` at any time to change settings. Values can be preset from the environment:
+`SERVICES="web:8080,pwn:1337" CAPTURE_IFACE=eth0 ./install.sh -y`
 
 ## Configuration
 Services shown in the UI are set with `SERVICES` in `.env`, as `name:port` (ip = `VM_IP`) or `name:ip:port`, comma separated:

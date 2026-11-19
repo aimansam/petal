@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Remove Petal from Docker: containers, network, database volume and petal-* images, plus leftovers
 # of an old Tulip install (tulip-* images, tulip_* volumes/networks). Keeps .env and the pcaps, so
-# ./setup.sh can rebuild and re-import later.
+# ./install.sh can rebuild and re-import later.
 #
 #   ./clean.sh            show what will be removed, ask, then remove it
 #   ./clean.sh --pcaps    also delete the captured pcaps in the traffic folder
@@ -51,7 +51,7 @@ get_env() { # value of KEY in .env, without quotes
 }
 
 # Remove everything Petal created in Docker (and leftovers of an old Tulip install). Keeps .env and,
-# unless asked, the pcaps, so ./setup.sh can rebuild and re-import later.
+# unless asked, the pcaps, so ./install.sh can rebuild and re-import later.
 cmd_clean() {
     command -v docker >/dev/null || die "docker is not installed: nothing to clean"
     local dir pcaps containers images volumes networks
@@ -71,7 +71,7 @@ cmd_clean() {
     echo "    volumes:    ${volumes:-none}   (the database: all imported flows)"
     echo "    networks:   ${networks:-none}"
     if [ "$CLEAN_PCAPS" = 1 ]; then echo "    pcaps:      $pcaps in $dir"
-    else echo "    kept:       .env and $pcaps pcaps in $dir (./setup.sh rebuilds and re-imports them)"; fi
+    else echo "    kept:       .env and $pcaps pcaps in $dir (./install.sh rebuilds and re-imports them)"; fi
     if [ "$INTERACTIVE" = 1 ]; then
         local a; read -r -p "Continue? [y/N] " a || true
         [[ "$a" =~ ^[Yy]$ ]] || { info "cancelled"; return 0; }
@@ -97,7 +97,7 @@ cmd_clean() {
     local left
     left="$(docker ps -a --format '{{.Names}}' --filter label=com.docker.compose.project=petal 2>/dev/null; docker images --format '{{.Repository}}' 2>/dev/null | grep -E '^(petal|tulip)-'; docker volume ls -q 2>/dev/null | grep -E '^(petal|tulip)_')" || true
     if [ -n "$left" ]; then warn "could not remove: $(paste -sd' ' - <<<"$left")"
-    else ok "Petal removed from Docker. Rebuild any time with ./setup.sh; delete this folder to remove it completely"; fi
+    else ok "Petal removed from Docker. Rebuild any time with ./install.sh; delete this folder to remove it completely"; fi
 }
 
 cmd_clean
