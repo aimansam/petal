@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"go-importer/internal/pkg/db"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -139,4 +143,79 @@ func TestRulesMatchJSONEscapedPayloads(t *testing.T) {
 			t.Errorf("%q: got %v, want %s", req, f.Tags, want)
 		}
 	}
+}
+
+func TestURLDecode(t *testing.T) {
+	if got := string(urlDecode([]byte("a%3Bb+c%2fd"))); got != "a;b c/d" {
+		t.Errorf("got %q", got)
+	}
+	if urlDecode([]byte("100%zz")) != nil || urlDecode([]byte("plain")) != nil {
+		t.Error("nothing decodable must give nil")
+	}
+}
+
+func TestBase64Texts(t *testing.T) {
+	payload := "127.0.0.1;cat /flag"
+	data := []byte("GET /run?data=" + base64.StdEncoding.EncodeToString([]byte(payload)) + " HTTP/1.1")
+	got := base64Texts(data)
+	if len(got) != 1 || string(got[0]) != payload {
+		t.Fatalf("got %q", got)
+	}
+	bin := make([]byte, 30)
+	for i := range bin {
+		bin[i] = byte(i * 37)
+	}
+	if got := base64Texts([]byte("id=" + base64.StdEncoding.EncodeToString(bin))); len(got) != 0 {
+		t.Errorf("binary must be dropped, got %q", got)
+	}
+}
+
+func gzipped(s string) string {
+	var b bytes.Buffer
+	w := gzip.NewWriter(&b)
+	w.Write([]byte(s))
+	w.Close()
+	return b.String()
+}
+
+func TestRulesMatchEncodedPayloads(t *testing.T) {
+	data, err := os.ReadFile("../../../../rules/tag-rules.default.conf")
+	if err != nil {
+		t.Skip("default rules file not found:", err)
+	}
+	rules, _ := ParseTagRules(string(data))
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	b64url := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	cases := map[string]string{
+		"GET /run?data=" + b64("127.0.0.1;cat /flag") + " HTTP/1.1":                                    "cmd-injection",
+		"POST /api HTTP/1.1\r\n\r\n{\"p\":\"" + b64url("../../../etc/passwd") + "\"}":                  "path-traversal",
+		"GET /f?x=%252e%252e%252f%252e%252e%252fetc%252fpasswd HTTP/1.1":                               "path-traversal",
+		"POST /q HTTP/1.1\r\nContent-Encoding: gzip\r\n\r\n" + gzipped("q=1 UNION SELECT flag FROM t"): "sqli",
+		"POST /q HTTP/1.1\r\n\r\nq=" + url64(b64("{{7*7}}")):                                           "template-injection",
+	}
+	for req, want := range cases {
+		f := flowWith(req, "HTTP/1.1 200 OK")
+		ApplyTagRules(f, rules)
+		if !contains(f.Tags, want) {
+			t.Errorf("%q: got %v, want %s", req, f.Tags, want)
+		}
+	}
+	clean := []string{
+		"GET /static/app.3f9a8b7c6d5e4f3a2b1c0d9e.js HTTP/1.1\r\nHost: x\r\n\r\n",
+		"GET /api HTTP/1.1\r\nAuthorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZWFtMSJ9.c2lnbmF0dXJlX2hlcmU\r\n\r\n",
+		"GET /x?id=" + b64("hello, this is a normal value") + " HTTP/1.1",
+		"GET /x?token=Zx81Qp0LmNvT2bW7yR4kA9sD HTTP/1.1",
+	}
+	for _, req := range clean {
+		f := flowWith(req, "HTTP/1.1 200 OK")
+		ApplyTagRules(f, rules)
+		if len(f.Tags) != 0 {
+			t.Errorf("false positive on %q: %v", req, f.Tags)
+		}
+	}
+}
+
+// url64 percent-encodes "=" and "+" like a browser form would, to also exercise URL-then-base64 decoding.
+func url64(s string) string {
+	return strings.NewReplacer("=", "%3D", "+", "%2B", "/", "%2F").Replace(s)
 }
