@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Outlet } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Outlet, Navigate, useLocation } from "react-router-dom";
 import { Suspense } from "react";
 import { useHotkeys } from 'react-hotkeys-hook';
 
@@ -9,7 +9,8 @@ import { FlowList } from "./components/FlowList";
 import { FlowView } from "./pages/FlowView";
 import { DiffView } from "./pages/DiffView";
 import { Corrie } from "./components/Corrie";
-import { AuthGate } from "./auth";
+import { AuthGate, useAuth } from "./auth";
+import { Setup } from "./pages/Setup";
 
 function App() {
   useHotkeys('esc', () => (document.activeElement as HTMLElement).blur(), {enableOnFormTags: true});
@@ -17,7 +18,8 @@ function App() {
     <AuthGate>
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Layout />}>
+        <Route path="/setup" element={<Setup />} />
+        <Route path="/" element={<SetupFirst><Layout /></SetupFirst>}>
           <Route index element={<Home />} />
           <Route
             path="flow/:id"
@@ -49,6 +51,14 @@ function App() {
     </BrowserRouter>
     </AuthGate>
   );
+}
+
+// Until the first setup is applied, every page leads to the setup page.
+function SetupFirst({ children }: { children: JSX.Element }) {
+  const { configured } = useAuth();
+  const location = useLocation();
+  if (!configured && location.pathname !== "/setup") return <Navigate to="/setup" replace />;
+  return children;
 }
 
 function Layout() {

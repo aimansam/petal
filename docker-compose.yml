@@ -48,6 +48,7 @@ services:
     networks:
       - internal
     volumes:
+      - setup-sock:/run/petal
       - ${TRAFFIC_DIR_HOST}:${TRAFFIC_DIR_DOCKER}:ro
     environment:
       PETAL_PASSWORD_HASH: ${PETAL_PASSWORD_HASH:-}
@@ -151,7 +152,22 @@ services:
       CAPTURE_FILTER: ${CAPTURE_FILTER:-tcp}
       CAPTURE_ROTATE: ${CAPTURE_ROTATE:-60}
 
+  # Setup helper for the dashboard's setup page: Docker + host network access, reachable only through
+  # the unix socket in the setup-sock volume (shared with the api), never over TCP.
+  setup:
+    build: services/setup
+    image: petal-setup:latest
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PETAL_HOME:-.}:${PETAL_HOME:-/petal}
+      - setup-sock:/run/petal
+    environment:
+      PETAL_HOME: ${PETAL_HOME:-/petal}
+
 volumes:
+  setup-sock:
   timescale-data:
 
 networks:

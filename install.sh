@@ -184,13 +184,10 @@ services_filter() { # "a:7001,b:10.0.0.1:7002" -> "tcp and (port 7001 or port 70
     if [ -n "$ports" ]; then echo "tcp and ($ports)"; else echo "tcp and not port 22 and not port ${UI_PORT:-3000}"; fi
 }
 
-# Interactive picker: list running containers (except Petal's own) that publish TCP ports and let the
-# user choose by number. Prints the chosen "name:hostport,..." on stdout (menu goes to stderr);
-# prints nothing when there is nothing to pick or the user just presses Enter.
-docker_pick() {
+
+docker_rows() { # "name|container|hostport|containerport|project" for running non-Petal containers with TCP ports
     command -v docker >/dev/null || return 0
-    local rows
-    rows="$(docker ps --format '{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.service"}}|{{.Names}}|{{.Ports}}' 2>/dev/null \
+    docker ps --format '{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.service"}}|{{.Names}}|{{.Ports}}' 2>/dev/null \
         | awk -F'|' '$1 != "petal" && $1 != "tulip" {
             name = ($2 != "") ? $2 : $3
             n = split($4, p, ", ")
@@ -200,37 +197,7 @@ docker_pick() {
                     key = $3 ":" hp[1]
                     if (!(key in seen)) { seen[key] = 1; print name "|" $3 "|" hp[1] "|" hp[2] "|" ($1 != "" ? $1 : "-") }
                 }
-          }' | sort -t'|' -k5,5 -k3,3n || true)"
-    [ -n "$rows" ] || return 0
-
-    {
-        echo
-        info "Running containers with published ports:"
-        printf '      %-16s %-28s %-18s %s\n' NAME CONTAINER "HOST -> CONTAINER" PROJECT
-        awk -F'|' '{ printf "  %2d) %-16s %-28s %-18s %s\n", NR, $1, $2, ":" $3 " -> " $4, $5 }' <<<"$rows"
-    } >&2
-
-    local pick
-    read -r -p "Pick services (e.g. 1,3,4  2-5  a project name  'all'; Enter = type them yourself): " pick || true
-    pick="$(tr -d '[:space:]' <<<"$pick")"
-    [ -n "$pick" ] || return 0
-    [ "$pick" = all ] && pick="1-$(wc -l <<<"$rows")"
-
-    local nums=() part i
-    IFS=, read -r -a parts <<<"$pick" || true
-    for part in "${parts[@]}"; do
-        if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-            for ((i = BASH_REMATCH[1]; i <= BASH_REMATCH[2]; i++)); do nums+=("$i"); done
-        elif [[ "$part" =~ ^[0-9]+$ ]]; then
-            nums+=("$part")
-        elif awk -F'|' -v p="$part" '$5 == p { f = 1 } END { exit !f }' <<<"$rows"; then
-            mapfile -t -O "${#nums[@]}" nums < <(awk -F'|' -v p="$part" '$5 == p { print NR }' <<<"$rows")
-        else
-            warn "ignoring '$part' (not a number, range or project name)" >&2
-        fi
-    done
-    printf '%s\n' "${nums[@]}" | awk -F'|' 'NR == FNR { want[$1] = 1; next } (FNR in want) { print $1 ":" $3 }' - <(cat <<<"$rows") \
-        | paste -sd, - || true
+          }' | sort -t'|' -k5,5 -k3,3n || true
 }
 
 vpn_ranges() { # subnets of VPN-style interfaces (tun*, wg*, tap*, ppp*), comma separated
@@ -357,7 +324,7 @@ ensure_password() {
     [ -n "$(get_env PETAL_SECRET)" ] || set_env PETAL_SECRET "$(head -c 48 /dev/urandom | od -An -tx1 | tr -d ' \n')"
     [ -n "$(get_env PETAL_PASSWORD_HASH)" ] && return 0
     local pw pw2 generated=0
-    if [ "$INTERACTIVE" = 1 ]; then
+    if [ "${PW_INTERACTIVE:-$INTERACTIVE}" = 1 ]; then
         echo
         info "Choose the team password for the dashboard (at least 8 characters)"
         while true; do
@@ -392,7 +359,8 @@ cmd_status() {
     info "flows in db:   $(compose exec -T timescale psql -U petal -d petal -tAc 'SELECT count(*) FROM flow' 2>/dev/null || echo '?')"
 }
 
-cmd_setup() {
+# Dependencies, .env creation/migration. Shared by every mode.
+prepare_env() {
     ensure_deps
 
     if [ ! -f .env ]; then
@@ -407,33 +375,33 @@ cmd_setup() {
         set_env TIMESCALE "postgres://petal@timescale:5432/petal"
         warn "migrated .env from Tulip: TIMESCALE now points to the petal database (a fresh one; old pcaps are re-imported)"
     fi
+    set_env PETAL_HOME "$PWD"   # the setup helper mounts the folder at this same path
+}
 
-    local def_iface def_ip
+detect_defaults() { # def_iface / def_ip of the default route
     def_iface="$(ip route show default 2>/dev/null | awk '{print $5; exit}')"
     def_ip="$(ip -4 -o addr show "${def_iface:-lo}" 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}')"
+}
+
+# Configure from environment values / .env / detected defaults, validate, then build and start.
+# Used by a configured re-run of ./install.sh and by the browser setup (PETAL_MODE=apply).
+cmd_setup() {
+    local def_iface def_ip
+    detect_defaults
 
     echo
-    info "Configuration (Enter keeps the value in brackets)"
+    info "Configuration"
     ask VM_IP           "Your vulnbox IP"                                         "$def_ip"
     local def_port; def_port="$(free_port 3000)"
     [ "$def_port" != 3000 ] && warn "port 3000 is already in use: $(ss -ltnpH 'sport = :3000' 2>/dev/null | grep -o 'users:(("[^"]*' | head -n1 | cut -d'"' -f2)"
     if [ -n "$(get_env UI_PORT)" ] && port_busy "$(get_env UI_PORT)"; then set_env UI_PORT ""; fi   # saved port got taken
     ask UI_PORT         "Web UI port"                                             "$def_port"
     # Which IP the dashboard listens on, e.g. the competition network IP so it is reachable there only.
-    local ips; ips="$(host_ips)"
-    if [ "$INTERACTIVE" = 1 ] && [ -n "$ips" ]; then
-        echo; info "IP addresses on this box (0.0.0.0 = all of them):"
-        awk '{ printf "      %-16s %s\n", $2, $1 }' <<<"$ips"
-    fi
     if [ -n "$(get_env UI_BIND)" ] && ! bind_ok "$(get_env UI_BIND)"; then
         warn "saved dashboard IP $(get_env UI_BIND) is no longer on this box"; set_env UI_BIND ""
     fi
     ask UI_BIND         "Dashboard IP (listen address; 0.0.0.0 = all)"            "0.0.0.0"
 
-    if [ "$INTERACTIVE" = 1 ] && [ -z "${SERVICES:-}" ]; then   # not preset from the environment
-        local picked; picked="$(docker_pick)"
-        [ -n "$picked" ] && SERVICES="$picked"   # shown below as the default, Enter accepts it
-    fi
     ask SERVICES        "Services as name:port,name:port (e.g. web:8080,pwn:1337)" ""
     SERVICES="$(normalize_services "$SERVICES")"
     set_env SERVICES "$SERVICES"
@@ -496,12 +464,18 @@ cmd_setup() {
     mkdir -p "$TRAFFIC_DIR_HOST"
     fix_owner "$TRAFFIC_DIR_HOST"
 
-    ensure_password
+    [ "${PETAL_MODE:-}" = apply ] || ensure_password
     set_env PETAL_CONFIGURED 1
 
     echo
-    info "Building and starting containers (first build takes a few minutes)..."
-    compose up -d --build --remove-orphans
+    if [ "${PETAL_MODE:-}" = apply ]; then
+        info "Applying the new settings (recreating containers)..."
+        # shellcheck disable=SC2046  # every service except the setup helper running this script
+        compose up -d --no-build --remove-orphans $(compose config --services | grep -vx setup)
+    else
+        info "Building and starting containers (first build takes a few minutes)..."
+        compose up -d --build --remove-orphans
+    fi
 
     local UI_HOST="$UI_BIND"; [ "$UI_BIND" = 0.0.0.0 ] && UI_HOST=127.0.0.1
     info "Waiting for the web UI..."
@@ -522,9 +496,72 @@ cmd_setup() {
     [ -n "$CAPTURE_IFACE" ] && ok "Capturing on $CAPTURE_IFACE ($CAPTURE_FILTER), flows appear every ~${CAPTURE_ROTATE}s once traffic arrives"
     if [ -n "$VPN_RANGES" ]; then ok "Attacker tags src:<ip> only for VPN range(s): $VPN_RANGES"
     else info "Attacker tags src:<ip> for every client IP (set a VPN range to limit them)"; fi
-    [ -n "$DOCKER_IFACE" ] && warn "Docker container IPs can change: re-run ./install.sh after recreating the CTF containers"
-    info "Change settings: re-run ./install.sh   |   logs: docker compose logs -f assembler capture   |   remove: ./clean.sh"
+    [ -n "$DOCKER_IFACE" ] && warn "Docker container IPs can change: apply the settings again (Settings page) after recreating the CTF containers"
+    info "Change settings: Settings page in the dashboard   |   logs: docker compose logs -f assembler capture   |   remove: ./clean.sh"
+}
+
+wait_for_ui() { # wait until the dashboard answers on $1:$2
+    local _
+    for _ in $(seq 1 60); do curl -fs -o /dev/null "http://$1:$2/" && return 0; sleep 2; done
+    return 1
+}
+
+# First install: safe defaults, team password, start everything with capture idle. The rest of the
+# configuration happens on the setup page in the browser.
+cmd_first_run() {
+    local def_iface def_ip
+    detect_defaults
+    [ -n "$(get_env VM_IP)" ]            || set_env VM_IP "$def_ip"
+    [ -n "$(get_env UI_PORT)" ] && ! port_busy "$(get_env UI_PORT)" || set_env UI_PORT "$(free_port 3000)"
+    [ -n "$(get_env UI_BIND)" ] && bind_ok "$(get_env UI_BIND)" || set_env UI_BIND 0.0.0.0
+    [ -n "$(get_env TRAFFIC_DIR_HOST)" ] || set_env TRAFFIC_DIR_HOST ./traffic
+    [ -n "$(get_env TICK_START)" ]       || set_env TICK_START "$(date -Iseconds)"
+    [ -n "$(get_env TICK_LENGTH)" ]      || set_env TICK_LENGTH 120000
+    [ -n "$(get_env CAPTURE_ROTATE)" ]   || set_env CAPTURE_ROTATE 60
+    set_env CAPTURE_IFACE ""             # capture stays idle until the setup page picks services
+    set_env PETAL_CONFIGURED 0
+    mkdir -p "$(get_env TRAFFIC_DIR_HOST)"; fix_owner "$(get_env TRAFFIC_DIR_HOST)"
+
+    ensure_password
+    echo
+    info "Building and starting Petal (first build takes a few minutes)..."
+    compose up -d --build --remove-orphans
+
+    local bind port host url
+    bind="$(get_env UI_BIND)"; port="$(get_env UI_PORT)"
+    host="$bind"; [ "$bind" = 0.0.0.0 ] && host=127.0.0.1
+    url="http://$([ "$bind" = 0.0.0.0 ] && get_env VM_IP || echo "$bind"):$port"
+    wait_for_ui "$host" "$port" || warn "dashboard not answering yet, check: docker compose logs -f frontend api"
+    echo
+    ok "Petal is running. Open $url, log in with the team password and finish the setup there."
+}
+
+# Machine-readable facts for the setup page (tab separated; read by services/setup/agent.py).
+cmd_discover() {
+    local def_iface def_ip k
+    detect_defaults
+    printf 'DEFAULT\tVM_IP\t%s\n' "$def_ip"
+    printf 'DEFAULT\tUI_PORT\t%s\n' "$(free_port 3000)"
+    printf 'DEFAULT\tVPN_RANGES\t%s\n' "$(vpn_ranges)"
+    printf 'DEFAULT\tTICK_START\t%s\n' "$(date -Iseconds)"
+    for k in VM_IP UI_PORT UI_BIND SERVICES CAPTURE_IFACE CAPTURE_FILTER CAPTURE_ROTATE VPN_RANGES \
+             TICK_START TICK_LENGTH FLAG_REGEX PETAL_CONFIGURED; do
+        printf 'ENV\t%s\t%s\n' "$k" "$(get_env "$k")"
+    done
+    host_ips | awk '{ printf "HOSTIP\t%s\t%s\n", $1, $2 }'
+    ip -o link show 2>/dev/null | awk -F': ' '{ sub(/@.*/, "", $2); print "IFACE\t" $2 }'
+    docker_rows | awk -F'|' '{ printf "CONTAINER\t%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, $5 }'
 }
 
 
-cmd_setup
+case "${PETAL_MODE:-}" in
+    discover) cmd_discover ;;
+    apply)    INTERACTIVE=0; prepare_env >/dev/null; cmd_setup ;;
+    "")
+        # Everything except the password is configured on the setup page: no questions here.
+        PW_INTERACTIVE="$INTERACTIVE"; INTERACTIVE=0
+        prepare_env
+        if [ "$(get_env PETAL_CONFIGURED)" = 1 ] || [ -n "${SERVICES:-}" ]; then cmd_setup; else cmd_first_run; fi
+        ;;
+    *) die "unknown PETAL_MODE '$PETAL_MODE'" ;;
+esac

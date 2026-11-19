@@ -3,7 +3,8 @@
 Petal is a flow analyzer for Attack / Defence CTF competitions, ready to run on a vulnbox. It lets players quickly find the traffic hitting their services, spot flags and exploits, and generates python snippets to replay attacks.
 
 Petal is based on [Tulip](https://github.com/OpenAttackDefenseTools/tulip) (see [Credits](#credits)) and adds:
-* `install.sh`: one script to install, configure, build and run it (Docker, `.env`, updates)
+* `install.sh`: one script to install, update, build and run it; the rest is set up in the browser
+* Team password login, and a setup / Settings page in the dashboard (services, capture, VPN range, game)
 * Capture container: rotating `tcpdump` on one or more interfaces, flows appear ~1 minute after traffic stops
 * Services running in Docker on the box are picked from a list and resolved to their container IP:port and
   every Docker network they use (traffic through tunnels and reverse proxies is captured too)
@@ -14,7 +15,8 @@ Install on a box:
 ```
 curl -fsSL https://raw.githubusercontent.com/aimansam/petal/main/install.sh | bash
 ```
-Re-running it (or `./install.sh` inside the `petal` folder) updates Petal and re-runs the setup.
+It asks for a team password (or prints a generated one), starts Petal and shows the URL: open it, log in and
+finish the setup page. Re-running it (or `./install.sh` inside the `petal` folder) updates Petal.
 To remove it from Docker: `./clean.sh` (it asks before removing anything, and whether to delete the pcaps), then delete the folder.
 
 ## Origins
@@ -47,16 +49,19 @@ git clone https://github.com/aimansam/petal.git && cd petal
 ./install.sh
 ```
 
-`install.sh` installs Docker if it is missing (Debian/Ubuntu), asks for your vulnbox IP, services,
-capture interface and game timing (sensible defaults are detected), writes `.env`, then builds and starts everything.
-A `capture` container runs `tcpdump` on the host and rotates pcaps into `./traffic`, which Petal imports automatically.
-The web UI is on port 3000 (`UI_PORT` in `.env`; setup picks a free port if 3000 is taken), on all IPs or only the one set in `UI_BIND` (e.g. the competition network IP).
-Requests that reach a service through a reverse proxy (nginx, a tunnel) are tagged `src:<attacker ip>`, taken from
-`X-Forwarded-For`/`X-Real-IP`/`CF-Connecting-IP` (install.sh trusts only the containers on the services' networks); set `VPN_RANGES` to tag only competition VPN addresses).
+`install.sh` installs Docker if it is missing (Debian/Ubuntu), asks for the team password (in a terminal;
+otherwise it generates one and prints it once), builds and starts everything. Then open the printed URL, log in
+and use the setup page: pick the services to watch from the running containers, check the network, VPN range and
+game settings, and apply. The same page is **Settings** in the dashboard header later on (including a password
+change). Applying is done by a small `setup` helper container; it has Docker access but no network port, and the
+dashboard can only reach it through the API's logged-in `/setup/*` routes.
 
-Both scripts take no arguments. Re-run `./install.sh` at any time to change settings; without a terminal it
-keeps the defaults / current `.env` values. Values can be preset from the environment:
-`SERVICES="web:8080,pwn:1337" CAPTURE_IFACE=eth0 ./install.sh`
+A `capture` container runs `tcpdump` on the host and rotates pcaps into `./traffic`, which Petal imports automatically.
+Requests that reach a service through a reverse proxy (nginx, a tunnel) are tagged `src:<attacker ip>`, taken from
+`X-Forwarded-For`/`X-Real-IP`/`CF-Connecting-IP` (only the containers on the services' networks are trusted).
+
+Both scripts take no arguments. For an unattended install, preset the settings in the environment and run it
+without a terminal: `SERVICES="web:8080,pwn:1337" ./install.sh </dev/null` (the generated password is printed).
 
 Day-to-day commands (run in the `petal` folder):
 ```

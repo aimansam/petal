@@ -249,7 +249,7 @@ function Diff() {
 function LogoutButton() {
   const { logout } = useAuth();
   return (
-    <button className="bg-gray-100 text-gray-800 rounded-md px-2 py-1" onClick={() => logout()}>
+    <button className="bg-gray-100 text-gray-800 rounded-md px-2 py-1 whitespace-nowrap" onClick={() => logout()}>
       Log out
     </button>
   );
@@ -301,6 +301,9 @@ export function Header() {
         <div className="bg-blue-100 text-gray-800 rounded-md px-2 py-1">
           Graph view
         </div>
+      </Link>
+      <Link to="/setup">
+        <div className="bg-gray-100 text-gray-800 rounded-md px-2 py-1 whitespace-nowrap">Settings</div>
       </Link>
       <LogoutButton />
       <div className="ml-auto mr-4" style={{ display: "flex" }}>
