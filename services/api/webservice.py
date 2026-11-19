@@ -44,14 +44,15 @@ from configurations import (
 )
 from pathlib import Path
 from data2req import convert_flow_to_http_requests, convert_single_http_requests
-from flask_cors import CORS
+from auth import init_auth
 from flask import request
 
 from flow2pwn import flow2pwn
 import database, json_util
 
 application = Flask(__name__)
-CORS(application)
+# No CORS: the dashboard reaches the API same-origin through the frontend's /api proxy.
+init_auth(application)
 db = database.Pool(os.environ["TIMESCALE"])
 
 

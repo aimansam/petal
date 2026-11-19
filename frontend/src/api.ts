@@ -1,6 +1,7 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 
 import { API_BASE_PATH } from "./const";
+import { UNAUTHORIZED_EVENT } from "./auth";
 import {
   Service,
   FullFlow,
@@ -21,8 +22,19 @@ function base64DecodeUnicode(str: string) : string {
   return new TextDecoder().decode(bytes);
 }
 
+const rawBaseQuery = fetchBaseQuery({ baseUrl: API_BASE_PATH, credentials: "same-origin" });
+
+// Any 401 means the session ended (logout, password change): tell AuthGate to show the login page.
+const baseQuery: typeof rawBaseQuery = async (args, api, extraOptions) => {
+  const result = await rawBaseQuery(args, api, extraOptions);
+  if (result.error && result.error.status === 401) {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+  return result;
+};
+
 export const petalApi = createApi({
-  baseQuery: fetchBaseQuery({ baseUrl: API_BASE_PATH }),
+  baseQuery,
   endpoints: (builder) => ({
     getServices: builder.query<Service[], void>({
       query: () => "/services",

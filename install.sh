@@ -351,6 +351,38 @@ docker_resolve() {
 }
 
 # ---------------------------------------------------------------- commands
+# Team password for the dashboard. Only a hash is stored (.env PETAL_PASSWORD_HASH), made with the
+# api image so it matches what the API checks. PETAL_SECRET signs the login cookies.
+ensure_password() {
+    [ -n "$(get_env PETAL_SECRET)" ] || set_env PETAL_SECRET "$(head -c 48 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    [ -n "$(get_env PETAL_PASSWORD_HASH)" ] && return 0
+    local pw pw2 generated=0
+    if [ "$INTERACTIVE" = 1 ]; then
+        echo
+        info "Choose the team password for the dashboard (at least 8 characters)"
+        while true; do
+            read -r -s -p "Password: " pw; echo
+            read -r -s -p "Repeat:   " pw2; echo
+            if [ "${#pw}" -lt 8 ]; then warn "too short"; elif [ "$pw" != "$pw2" ]; then warn "they don't match"; else break; fi
+        done
+    else
+        pw="$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-16)"
+        generated=1
+    fi
+    info "Building the api image to hash the password..."
+    compose build -q api >/dev/null
+    local hash
+    hash="$(printf '%s' "$pw" | compose run --rm --no-deps -T api python -c \
+        'import sys; from werkzeug.security import generate_password_hash as g; print(g(sys.stdin.read()))' 2>/dev/null | tail -n1)"
+    [[ "$hash" == *'$'* ]] || die "could not hash the password (is the api image building?)"
+    set_env PETAL_PASSWORD_HASH "$hash"
+    if [ "$generated" = 1 ]; then
+        ok "Dashboard password (shown once, write it down): $pw"
+    else
+        ok "Dashboard password set"
+    fi
+}
+
 cmd_status() {
     compose ps
     local dir; dir="$(get_env TRAFFIC_DIR_HOST)"; dir="${dir:-./traffic}"
@@ -463,6 +495,9 @@ cmd_setup() {
 
     mkdir -p "$TRAFFIC_DIR_HOST"
     fix_owner "$TRAFFIC_DIR_HOST"
+
+    ensure_password
+    set_env PETAL_CONFIGURED 1
 
     echo
     info "Building and starting containers (first build takes a few minutes)..."

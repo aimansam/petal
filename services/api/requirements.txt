@@ -1,4 +1,3 @@
-Flask_Cors
 Flask
 requests
 gunicorn

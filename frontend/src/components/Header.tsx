@@ -1,4 +1,5 @@
 import { format, parse } from "date-fns";
+import { useAuth } from "../auth";
 import { Suspense, useState } from "react";
 import { useHotkeys } from 'react-hotkeys-hook';
 import {
@@ -245,6 +246,15 @@ function Diff() {
   );
 }
 
+function LogoutButton() {
+  const { logout } = useAuth();
+  return (
+    <button className="bg-gray-100 text-gray-800 rounded-md px-2 py-1" onClick={() => logout()}>
+      Log out
+    </button>
+  );
+}
+
 export function Header() {
   let { currentTick, setToLastnTicks, setTimeParam } = getTickStuff();
   let [searchParams] = useSearchParams();
@@ -263,7 +273,7 @@ export function Header() {
   return (
     <>
       <Link to={`/?${searchParams}`}>
-        <div className="header-icon">🌷</div>
+        <div className="header-icon">🌸</div>
       </Link>
       <div>
         <TextSearch></TextSearch>
@@ -292,6 +302,7 @@ export function Header() {
           Graph view
         </div>
       </Link>
+      <LogoutButton />
       <div className="ml-auto mr-4" style={{ display: "flex" }}>
         <div className="mr-4">
           <FirstDiff />
