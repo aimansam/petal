@@ -15,8 +15,8 @@ Install on a box:
 curl -fsSL https://raw.githubusercontent.com/aimansam/petal/main/install.sh | bash
 ```
 Re-running it updates the install and re-runs `./setup.sh`.
-To remove it from Docker (containers, database, images; pcaps and `.env` are kept): `./setup.sh clean`
-(`./setup.sh clean --pcaps` also deletes the captures), then delete the folder.
+To remove it from Docker (containers, database, images; pcaps and `.env` are kept): `./clean.sh`
+(`./clean.sh --pcaps` also deletes the captures), then delete the folder.
 
 ## Origins
 Petal is based on Tulip. Tulip was developed by Team Europe for use in the first International Cyber Security Challenge. The project is a fork of [flower](https://github.com/secgroup/flower), but it contains quite some changes:
