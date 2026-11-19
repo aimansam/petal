@@ -92,6 +92,7 @@ services:
     networks:
       - internal
     volumes:
+      - ./rules:/petal/rules:ro
       - ${TRAFFIC_DIR_HOST}:${TRAFFIC_DIR_DOCKER}:ro,z
     # Command line flags most likely to fix a petal issue:
     # - -http-session-tracking: enable HTTP session tracking
@@ -119,22 +120,6 @@ services:
       BPF: ${BPF}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-  enricher:
-    build:
-      context: services/go-importer
-      dockerfile: Dockerfile-enricher
-    image: petal-enricher:latest
-    restart: unless-stopped
-    depends_on:
-      - timescale
-    networks:
-      - internal
-    volumes:
-      - ${TRAFFIC_DIR_HOST}:${TRAFFIC_DIR_DOCKER}:ro,z
-    command: "./enricher -eve ${TRAFFIC_DIR_DOCKER}/eve.json"
-    environment:
-      TIMESCALE: ${TIMESCALE}
 
   capture:
     build: services/capture

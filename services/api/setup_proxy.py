@@ -54,6 +54,14 @@ def init_setup_proxy(app: Flask) -> None:
     def setup_apply():
         return _forward("POST", "/apply", request.get_json(silent=True) or {})
 
+    @app.get("/setup/rules")
+    def setup_rules_get():
+        return _forward("GET", "/rules", timeout=10)
+
+    @app.post("/setup/rules")
+    def setup_rules_post():
+        return _forward("POST", "/rules", request.get_json(silent=True) or {}, timeout=10)
+
     @app.post("/setup/password")
     def setup_password():
         return _forward("POST", "/password", request.get_json(silent=True) or {})

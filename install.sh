@@ -376,6 +376,8 @@ prepare_env() {
         warn "migrated .env from Tulip: TIMESCALE now points to the petal database (a fresh one; old pcaps are re-imported)"
     fi
     set_env PETAL_HOME "$PWD"   # the setup helper mounts the folder at this same path
+    # Editable tag rules (Settings page); start from the shipped defaults
+    [ -f rules/tag-rules.conf ] || { cp rules/tag-rules.default.conf rules/tag-rules.conf && fix_owner rules/tag-rules.conf; }
 }
 
 detect_defaults() { # def_iface / def_ip of the default route

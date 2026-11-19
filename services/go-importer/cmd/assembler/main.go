@@ -113,6 +113,9 @@ func reassemblyCallback(entry db.FlowEntry) {
 			ApplyFlagTags(&entry, flag_regex, flagValidator)
 		}
 
+		// Apply the editable tag rules (sqli, path-traversal, ...)
+		ApplyTagRules(&entry, tagRules.current())
+
 		// Apply flagid in / out
 		if *flagid {
 			unix := time.Now().Unix()
@@ -276,6 +279,15 @@ func main() {
 	if *vpnRangesRaw == "" {
 		*vpnRangesRaw = os.Getenv("VPN_RANGES")
 	}
+	if *tagRulesPath == "" {
+		*tagRulesPath = os.Getenv("TAG_RULES")
+	}
+	if *tagRulesPath == "" {
+		*tagRulesPath = "/petal/rules/tag-rules.conf"
+	}
+	tagRules.path = *tagRulesPath
+	tagRules.current()
+
 	vpnRanges = ParseTrustedProxies(*vpnRangesRaw)
 	if len(vpnRanges) > 0 {
 		log.Printf("src:<ip> tags limited to the VPN range(s) %s", *vpnRangesRaw)

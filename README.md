@@ -104,66 +104,22 @@ rsync -avz -e ssh --progress root@10.0.0.2:/pcaps ./pcaps
 3. Add a bind to the assembler service so it can read /traffic
    > (Just change `TRAFFIC_DIR_HOST` in `.env`)
 
-The ingestor will use inotify to watch for new pcap's and suricata logs. No need to set a chron job.
+The ingestor will use inotify to watch for new pcap's. No need to set a chron job.
 
 
-## Suricata synchronization
-
-### Run in Docker
-
-Configure `SURICATA_DIR_HOST` in `.env`.
-
-Create some rules (404 for testing):
-```bash
-. .env
-mkdir -p ${SURICATA_DIR_HOST}/{etc,lib/rules,log}
-echo 'alert tcp any any -> any any (msg: "404 Not Found"; http.stat_code; content:"404"; metadata: tag notfound; sid:4; rev: 1;)' >> ${SURICATA_DIR_HOST}/lib/rules/suricata.rules
+## Tag rules
+Petal tags every new flow that matches one of your rules, next to the built-in `flag-in`/`flag-out` and
+`src:<ip>` tags. Edit them on the **Settings** page (saved to `rules/tag-rules.conf`, applied within a few
+seconds, no restart). One rule per line:
 ```
-
-After that run (default config for `eve.json` logging was good enough):
-
-```bash
-docker compose -f docker-compose-suricata.yml up -d --build
+sqli = (?i)union(\s|%20|\+)+select        # what the client sent
+leak-passwd @out = root:x:0:0:           # what the service answered
+recipe-sqli = /search\?q=.*union          # an exploit you just spotted
 ```
-
-### Metadata
-Tags are read from the metadata field of a rule. For example, here's a simple rule to detect a path traversal:
-```
-alert tcp any any -> any any (msg: "Path Traversal-../"; flow:to_server; content: "../"; metadata: tag path_traversal; sid:1; rev: 1;)
-```
-Once this rule is seen in traffic, the `path_traversal` tag will automatically be added to the filters in Petal.
-
-> [!NOTE]
->
-> After editing Suricata rules (renaming or id change) please:
->
-> Remove old logs: `rm ${SURICATA_DIR_HOST}/log/*` (otherwise old signatures will be repopulated).
->
-> Restart Docker containers.
->
-> If database was only restarted (not dropped), try cleaning tags/signatures manually.
-
-### eve.json
-Suricata alerts are read directly from the `eve.json` file. Because this file can get quite verbose when all extensions are enabled, it is recommended to strip the config down a fair bit. For example:
-```yaml
-# ...
-  - eve-log:
-      enabled: yes
-      filetype: regular #regular|syslog|unix_dgram|unix_stream|redis
-      filename: eve.json
-      pcap-file: false
-      community-id: false
-      community-id-seed: 0
-      types:
-        - alert:
-            metadata: yes
-            # Enable the logging of tagged packets for rules using the
-            # "tag" keyword.
-            tagged-packets: yes
-# ...
-```
-
-Sessions with matched alerts will be highlighted in the front-end and include which rule was matched.
+Tags use `a-z 0-9 _ -`, regexes are Go/RE2 (`(?i)` ignores case). Starter rules for SQL injection, path
+traversal, command and template injection, XSS and `/etc/passwd` leaks ship in
+`rules/tag-rules.default.conf`. Tip: when you find an exploit in the traffic, add a rule for it to see every
+later attempt, who sends it and whether your patch holds.
 
 # Security
 Your Petal instance will probably contain sensitive CTF information, like flags stolen from your machines. If you expose it to the internet and other people find it, you risk losing additional flags. It is recommended to host it on an internal network (for instance behind a VPN) or to put Petal behind some form of authentication.

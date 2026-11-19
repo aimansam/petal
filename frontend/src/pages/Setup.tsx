@@ -75,6 +75,10 @@ export function Setup() {
   const [newUrl, setNewUrl] = useState("");
   const polling = useRef(false);
 
+  const [rules, setRules] = useState<string | null>(null);
+  const [rulesMsg, setRulesMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [rulesBusy, setRulesBusy] = useState(false);
+
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [pwMsg, setPwMsg] = useState("");
@@ -113,6 +117,29 @@ export function Setup() {
       })
       .catch((e) => setLoadError(String(e.message ?? e)));
   }, []);
+
+  useEffect(() => {
+    api("/setup/rules")
+      .then((r) => r.json())
+      .then((d) => setRules(typeof d.rules === "string" ? d.rules : ""))
+      .catch(() => setRules(""));
+  }, []);
+
+  async function saveRules() {
+    setRulesBusy(true);
+    setRulesMsg(null);
+    try {
+      const r = await postJson("/setup/rules", { rules: rules ?? "" });
+      const d = await r.json().catch(() => ({}));
+      setRulesMsg(r.ok
+        ? { ok: true, text: `Saved ${d.rules} rule(s). They apply to new flows within a few seconds.` }
+        : { ok: false, text: d.error ?? `error ${r.status}` });
+    } catch {
+      setRulesMsg({ ok: false, text: "cannot reach the server" });
+    } finally {
+      setRulesBusy(false);
+    }
+  }
 
   const projects = useMemo(() => {
     const groups: Record<string, Container[]> = {};
@@ -324,6 +351,33 @@ export function Setup() {
             <pre className="text-xs bg-gray-900 text-gray-100 rounded-md p-3 max-h-64 overflow-auto whitespace-pre-wrap">
               {job.log.slice(-25).join("\n") || "starting…"}
             </pre>
+          </Section>
+        )}
+
+        {configured && (
+          <Section
+            title="Tag rules"
+            hint="Every new flow that matches gets the tag. 'tag = regex' matches what the client sent, 'tag @out = regex' what the service answered. Go/RE2 regex, (?i) ignores case, # starts a comment. Add a rule when you spot an exploit to see every later attempt."
+          >
+            {rules === null ? (
+              <p className="text-sm text-gray-500">Loading…</p>
+            ) : (
+              <>
+                <textarea
+                  className="w-full border rounded-md p-2 font-mono text-xs text-gray-800"
+                  rows={Math.min(24, Math.max(8, rules.split("\n").length + 1))}
+                  spellCheck={false}
+                  value={rules}
+                  onChange={(e) => { setRules(e.target.value); setRulesMsg(null); }}
+                />
+                <div className="flex items-center gap-3 mt-2">
+                  <button type="button" onClick={saveRules} disabled={rulesBusy} className="bg-gray-200 rounded-md px-3 py-1 disabled:opacity-50">
+                    {rulesBusy ? "Saving…" : "Save rules"}
+                  </button>
+                  {rulesMsg && <span className={`text-sm ${rulesMsg.ok ? "text-green-700" : "text-red-600"}`}>{rulesMsg.text}</span>}
+                </div>
+              </>
+            )}
           </Section>
         )}
 

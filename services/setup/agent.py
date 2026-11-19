@@ -10,6 +10,7 @@ forwards requests from logged-in users. All real work is done by install.sh:
   GET  /job        state and log of the last apply
   POST /password   set a new team password (hash in .env, then recreate the API)
   GET  /status     container states and current settings, read-only (for the Status page)
+  GET  /rules      tag rules file;  POST /rules  validate and save it (the assembler reloads it)
 """
 
 import json
@@ -210,6 +211,50 @@ def status():
     return {"containers": containers, "settings": {k: env.get(k, "") for k in STATUS_KEYS}, "job": last_job}
 
 
+RULES_FILE = os.path.join(HOME, "rules", "tag-rules.conf")
+RULE_LINE = re.compile(r"^([a-z0-9_-]{1,40})(\s+@out)?\s*=\s*(.+?)\s*$")
+# Go's RE2 has no lookaround or backreferences: reject them here instead of silently skipping.
+RE2_UNSUPPORTED = re.compile(r"\(\?(=|!|<=|<!)|\\[1-9]")
+
+
+def read_rules():
+    try:
+        return open(RULES_FILE).read()
+    except OSError:
+        return ""
+
+
+def save_rules(text):
+    if not isinstance(text, str):
+        raise ValueError("rules must be text")
+    if len(text) > 65536:
+        raise ValueError("rules file too large (max 64 KB)")
+    count = 0
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = RULE_LINE.match(line)
+        if not m:
+            raise ValueError(f"line {n}: expected 'tag = regex' or 'tag @out = regex' (tag: a-z 0-9 _ -, max 40)")
+        if RE2_UNSUPPORTED.search(m.group(3)):
+            raise ValueError(f"line {n}: lookarounds and backreferences are not supported (Go/RE2 regex)")
+        try:
+            re.compile(m.group(3))
+        except re.error as e:
+            raise ValueError(f"line {n}: invalid regex: {e}")
+        count += 1
+    if count > 200:
+        raise ValueError("too many rules (max 200)")
+    os.makedirs(os.path.dirname(RULES_FILE), exist_ok=True)
+    mode = "r+" if os.path.exists(RULES_FILE) else "w"
+    with open(RULES_FILE, mode) as f:  # in place: keeps owner/permissions
+        f.seek(0)
+        f.write(text if text.endswith("\n") else text + "\n")
+        f.truncate()
+    return count
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "petal-setup"
 
@@ -236,6 +281,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, discover())
             if self.path == "/status":
                 return self._send(200, status())
+            if self.path == "/rules":
+                return self._send(200, {"rules": read_rules()})
             if self.path == "/job":
                 with job_lock:
                     return self._send(200, dict(job))
@@ -249,6 +296,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/apply":
                 start_apply(validate(data.get("settings")))
                 return self._send(202, {"state": "running"})
+            if self.path == "/rules":
+                return self._send(200, {"ok": True, "rules": save_rules(data.get("rules"))})
             if self.path == "/password":
                 set_password(data.get("password"))
                 return self._send(200, {"ok": True})

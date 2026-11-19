@@ -133,3 +133,6 @@ workspace.xml
 
 /traffic
 suricata
+
+# Petal: tag rules edited on the Settings page (defaults: rules/tag-rules.default.conf)
+/rules/tag-rules.conf
