@@ -95,3 +95,48 @@ func TestReloadOnChange(t *testing.T) {
 		t.Fatalf("missing file must give no rules: %+v", r)
 	}
 }
+
+func TestJSONUnescape(t *testing.T) {
+	cases := map[string]string{
+		`{"host":"127.0.0.1\u003bcat /flag"}`: `{"host":"127.0.0.1;cat /flag"}`,
+		`{"q":"1 \u0055NION SELECT"}`:         `{"q":"1 UNION SELECT"}`,
+		`a\"b\\c\/d\ne\tf`:                    "a\"b\\c/d\ne\tf",
+		`\ud83d\ude00 smile`:                  "\U0001F600 smile",
+		`bad \u00zz and \q stay`:              "",
+		`no escapes here`:                     "",
+		`trailing \`:                          "",
+	}
+	for in, want := range cases {
+		got := jsonUnescape([]byte(in))
+		if want == "" {
+			if got != nil {
+				t.Errorf("%q: want nil (nothing decoded), got %q", in, got)
+			}
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRulesMatchJSONEscapedPayloads(t *testing.T) {
+	data, err := os.ReadFile("../../../../rules/tag-rules.default.conf")
+	if err != nil {
+		t.Skip("default rules file not found:", err)
+	}
+	rules, _ := ParseTagRules(string(data))
+	cases := map[string]string{
+		`POST /ping HTTP/1.1` + "\r\n\r\n" + `{"host":"127.0.0.1\u003bcat /flag"}`:  "cmd-injection",
+		`POST /api HTTP/1.1` + "\r\n\r\n" + `{"q":"1\u0027 \u0055NION SELECT 1"}`:   "sqli",
+		`POST /file HTTP/1.1` + "\r\n\r\n" + `{"path":"..\/..\/etc\/passwd"}`:       "path-traversal",
+		`POST /hi HTTP/1.1` + "\r\n\r\n" + `{"name":"\u007b\u007b7*7\u007d\u007d"}`: "template-injection",
+	}
+	for req, want := range cases {
+		f := flowWith(req, "HTTP/1.1 200 OK")
+		ApplyTagRules(f, rules)
+		if !contains(f.Tags, want) {
+			t.Errorf("%q: got %v, want %s", req, f.Tags, want)
+		}
+	}
+}

@@ -116,7 +116,9 @@ sqli = (?i)union(\s|%20|\+)+select        # what the client sent
 leak-passwd @out = root:x:0:0:           # what the service answered
 recipe-sqli = /search\?q=.*union          # an exploit you just spotted
 ```
-Tags use `a-z 0-9 _ -`, regexes are Go/RE2 (`(?i)` ignores case). Starter rules for SQL injection, path
+Tags use `a-z 0-9 _ -`, regexes are Go/RE2 (`(?i)` ignores case). Rules see the whole request (headers and
+body, also POST/JSON/multipart); JSON escapes are decoded before matching, so `"127.0.0.1\\u003bcat /flag"`
+is caught like `;cat /flag`, and the starter rules also match URL-encoded forms. Starter rules for SQL injection, path
 traversal, command and template injection, XSS and `/etc/passwd` leaks ship in
 `rules/tag-rules.default.conf`. Tip: when you find an exploit in the traffic, add a rule for it to see every
 later attempt, who sends it and whether your patch holds.

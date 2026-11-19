@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"go-importer/internal/pkg/db"
 	"log"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // Tag rules: "tag = regex" lines in a text file, edited on the Settings page. Every new flow whose
@@ -94,7 +97,16 @@ func (s *tagRuleSet) current() []tagRule {
 }
 
 // ApplyTagRules adds the tag of every rule that matches the flow (client data, or server data for @out).
+// Each item is matched as sent and, if it contains JSON escapes, also with them decoded, so a payload
+// hidden as "127.0.0.1\u003bcat /flag" is caught by the same rule as "127.0.0.1;cat /flag".
 func ApplyTagRules(flow *db.FlowEntry, rules []tagRule) {
+	if len(rules) == 0 {
+		return
+	}
+	decoded := make([][]byte, len(flow.Flow))
+	for i := range flow.Flow {
+		decoded[i] = jsonUnescape(flow.Flow[i].Data) // nil when there is nothing to decode
+	}
 	for _, r := range rules {
 		if contains(flow.Tags, r.tag) {
 			continue
@@ -104,10 +116,86 @@ func ApplyTagRules(flow *db.FlowEntry, rules []tagRule) {
 			if (item.From == "s") != r.out {
 				continue
 			}
-			if r.re.Match(item.Data) {
+			if r.re.Match(item.Data) || (decoded[i] != nil && r.re.Match(decoded[i])) {
 				flow.Tags = append(flow.Tags, r.tag)
 				break
 			}
 		}
 	}
+}
+
+// jsonUnescape decodes JSON string escapes (\uXXXX incl. surrogate pairs, \n \t \r \b \f \/ \" \\)
+// anywhere in data. Returns nil if data has no escape sequences, so callers can skip the second match.
+// Invalid escapes are kept as they are.
+func jsonUnescape(data []byte) []byte {
+	if bytes.IndexByte(data, '\\') < 0 {
+		return nil
+	}
+	out := make([]byte, 0, len(data))
+	changed := false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if c != '\\' || i+1 >= len(data) {
+			out = append(out, c)
+			continue
+		}
+		switch e := data[i+1]; e {
+		case '"', '\\', '/':
+			out = append(out, e)
+		case 'n':
+			out = append(out, '\n')
+		case 't':
+			out = append(out, '\t')
+		case 'r':
+			out = append(out, '\r')
+		case 'b':
+			out = append(out, '\b')
+		case 'f':
+			out = append(out, '\f')
+		case 'u':
+			r, n := decodeUnicodeEscape(data[i:])
+			if n == 0 {
+				out = append(out, c)
+				continue
+			}
+			out = utf8.AppendRune(out, r)
+			i += n - 1
+			changed = true
+			continue
+		default:
+			out = append(out, c)
+			continue
+		}
+		i++
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return out
+}
+
+// decodeUnicodeEscape reads "\uXXXX" (and a following low surrogate "\uXXXX") at the start of b.
+// Returns the rune and the number of bytes used, or 0 if b does not start with a valid escape.
+func decodeUnicodeEscape(b []byte) (rune, int) {
+	hex4 := func(b []byte) (rune, bool) {
+		if len(b) < 6 || b[0] != '\\' || b[1] != 'u' {
+			return 0, false
+		}
+		v, err := strconv.ParseUint(string(b[2:6]), 16, 32)
+		return rune(v), err == nil
+	}
+	r, ok := hex4(b)
+	if !ok {
+		return 0, 0
+	}
+	if utf16.IsSurrogate(r) {
+		if r2, ok := hex4(b[6:]); ok {
+			if dec := utf16.DecodeRune(r, r2); dec != utf8.RuneError {
+				return dec, 12
+			}
+		}
+		return utf8.RuneError, 6
+	}
+	return r, 6
 }
