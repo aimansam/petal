@@ -39,9 +39,18 @@ Petal is based on Tulip. Tulip was developed by Team Europe for use in the first
 \*\* - to enable, configure PCAP-over-IP server (e.g. [pcap-broker](https://github.com/fox-it/pcap-broker) as suggested in [PR 24](https://github.com/OpenAttackDefenseTools/tulip/pull/24)) and set `PCAP_OVER_IP` (and `BPF` if necessary) in `.env`
 
 ## Screenshots
-![](./demo_images/demo1.png)
-![](./demo_images/demo2.png)
-![](./demo_images/demo3.png)
+**Dashboard**: an SQL injection through the reverse proxy, tagged `sqli` and with the real attacker `src:<ip>`
+![Dashboard with a tagged SQL injection](./demo_images/dashboard.png)
+
+**Binary services**: a NOP sled + execve shellcode sent to a raw TCP service, tagged `nop-sled` / `shellcode`
+![Hex view of a tagged pwn payload](./demo_images/binary.png)
+
+**Status**: capture health, imports, flows per service, containers and settings
+![Status page](./demo_images/status.png)
+
+**Tag rules** on the Settings page, and the team login
+
+<img src="./demo_images/tag-rules.png" alt="Tag rules editor" width="49%"> <img src="./demo_images/login.png" alt="Login page" width="49%">
 
 ## Quick start (fresh box)
 
