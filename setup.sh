@@ -7,6 +7,8 @@
 #   ./setup.sh logs       follow assembler + capture logs
 #   ./setup.sh stop       stop all Petal containers
 #   ./setup.sh reset      stop and DELETE the database (pcaps in traffic dir are kept)
+#   ./setup.sh clean      remove containers, database, images (+ old Tulip leftovers); keeps pcaps/.env
+#   ./setup.sh clean --pcaps   same, and also delete the captured pcaps
 #
 # Any setting can be preset from the environment, e.g.
 #   SERVICES="web:7001,pwn:7002" CAPTURE_IFACE=eth0 ./setup.sh -y
@@ -21,11 +23,13 @@ die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------- arguments
 CMD="setup"
 INTERACTIVE=1
+CLEAN_PCAPS=0
 for arg in "$@"; do
     case "$arg" in
         -y|--yes) INTERACTIVE=0 ;;
-        -h|--help|help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        setup|status|logs|stop|reset) CMD="$arg" ;;
+        -h|--help|help) sed -n '2,/^set /p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+        --pcaps) CLEAN_PCAPS=1 ;;
+        setup|status|logs|stop|reset|clean) CMD="$arg" ;;
         *) die "unknown argument '$arg' (try --help)" ;;
     esac
 done
@@ -437,6 +441,56 @@ cmd_setup() {
     info "Change settings: re-run ./setup.sh   |   progress: ./setup.sh status"
 }
 
+# Remove everything Petal created in Docker (and leftovers of an old Tulip install). Keeps .env and,
+# unless asked, the pcaps, so ./setup.sh can rebuild and re-import later.
+cmd_clean() {
+    command -v docker >/dev/null || die "docker is not installed: nothing to clean"
+    local dir pcaps containers images volumes networks
+    dir="$(get_env TRAFFIC_DIR_HOST)"; dir="${dir:-./traffic}"
+    pcaps="$(find "$dir" -name '*.pcap*' 2>/dev/null | wc -l)"
+    containers="$(for p in petal tulip; do docker ps -a --format '{{.Names}}' --filter "label=com.docker.compose.project=$p" 2>/dev/null; done | sort | paste -sd' ' -)"
+    images="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^(petal|tulip)-' | sort | paste -sd' ' - || true)"
+    volumes="$(docker volume ls -q 2>/dev/null | grep -E '^(petal|tulip)_' | sort | paste -sd' ' - || true)"
+    networks="$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -E '^(petal|tulip)_' | sort | paste -sd' ' - || true)"
+
+    if [ -z "$containers$images$volumes$networks" ] && { [ "$CLEAN_PCAPS" = 0 ] || [ "$pcaps" = 0 ]; }; then
+        ok "nothing to clean"; return 0
+    fi
+    info "This removes:"
+    echo "    containers: ${containers:-none}"
+    echo "    images:     ${images:-none}"
+    echo "    volumes:    ${volumes:-none}   (the database: all imported flows)"
+    echo "    networks:   ${networks:-none}"
+    if [ "$CLEAN_PCAPS" = 1 ]; then echo "    pcaps:      $pcaps in $dir"
+    else echo "    kept:       .env and $pcaps pcaps in $dir (./setup.sh rebuilds and re-imports them)"; fi
+    if [ "$INTERACTIVE" = 1 ]; then
+        local a; read -r -p "Continue? [y/N] " a || true
+        [[ "$a" =~ ^[Yy]$ ]] || { info "cancelled"; return 0; }
+        if [ "$CLEAN_PCAPS" = 0 ] && [ "$pcaps" -gt 0 ]; then
+            read -r -p "Also delete the $pcaps captured pcaps? [y/N] " a || true
+            [[ "$a" =~ ^[Yy]$ ]] && CLEAN_PCAPS=1
+        fi
+    fi
+
+    [ -f docker-compose.yml ] && compose down -v --remove-orphans >/dev/null 2>&1 || true
+    # shellcheck disable=SC2086  # word-split lists of names
+    {
+        [ -n "$containers" ] && docker rm -f $containers >/dev/null 2>&1
+        [ -n "$images" ]     && docker image rm -f $images >/dev/null 2>&1
+        [ -n "$volumes" ]    && docker volume rm -f $volumes >/dev/null 2>&1
+        [ -n "$networks" ]   && docker network rm $networks >/dev/null 2>&1
+    } || true
+    if [ "$CLEAN_PCAPS" = 1 ]; then
+        find "$dir" -name '*.pcap*' -type f -delete 2>/dev/null || true
+        ok "deleted $pcaps pcaps"
+    fi
+
+    local left
+    left="$(docker ps -a --format '{{.Names}}' --filter label=com.docker.compose.project=petal 2>/dev/null; docker images --format '{{.Repository}}' 2>/dev/null | grep -E '^(petal|tulip)-'; docker volume ls -q 2>/dev/null | grep -E '^(petal|tulip)_')" || true
+    if [ -n "$left" ]; then warn "could not remove: $(paste -sd' ' - <<<"$left")"
+    else ok "Petal removed from Docker. Rebuild any time with ./setup.sh; delete this folder to remove it completely"; fi
+}
+
 case "$CMD" in
     setup)  cmd_setup ;;
     status) cmd_status ;;
@@ -448,4 +502,5 @@ case "$CMD" in
         compose down -v
         ok "database wiped; run ./setup.sh to start fresh (existing pcaps will be re-imported)"
         ;;
+    clean)  cmd_clean ;;
 esac
