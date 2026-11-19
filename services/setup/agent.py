@@ -9,6 +9,7 @@ forwards requests from logged-in users. All real work is done by install.sh:
   POST /apply      validate settings, then run PETAL_MODE=apply ./install.sh in the background
   GET  /job        state and log of the last apply
   POST /password   set a new team password (hash in .env, then recreate the API)
+  GET  /status     container states and current settings, read-only (for the Status page)
 """
 
 import json
@@ -175,6 +176,40 @@ def set_password(password):
     threading.Thread(target=recreate_api, daemon=True).start()
 
 
+STATUS_KEYS = ("VM_IP", "UI_BIND", "UI_PORT", "SERVICES", "CAPTURE_IFACE", "CAPTURE_FILTER",
+               "CAPTURE_ROTATE", "VPN_RANGES", "TICK_START", "TICK_LENGTH", "FLAG_REGEX", "PETAL_CONFIGURED")
+
+
+def read_env():
+    env = {}
+    try:
+        for line in open(os.path.join(HOME, ".env")):
+            m = re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$", line.rstrip("\n"))
+            if m:
+                env[m.group(1)] = re.sub(r"^(['\"])(.*)\1$", r"\2", m.group(2))
+    except OSError:
+        pass
+    return env
+
+
+def status():
+    res = subprocess.run(["docker", "compose", "ps", "-a", "--format", "json"], cwd=HOME,
+                         capture_output=True, text=True, timeout=30)
+    containers = []
+    for line in res.stdout.splitlines():
+        try:
+            c = json.loads(line)
+        except ValueError:
+            continue
+        containers.append({"service": c.get("Service"), "state": c.get("State"), "status": c.get("Status"),
+                           "health": c.get("Health") or ""})
+    containers.sort(key=lambda c: c["service"] or "")
+    env = read_env()
+    with job_lock:
+        last_job = {"state": job["state"], "finished": job["finished"], "error": job["error"]}
+    return {"containers": containers, "settings": {k: env.get(k, "") for k in STATUS_KEYS}, "job": last_job}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "petal-setup"
 
@@ -199,6 +234,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.path == "/discover":
                 return self._send(200, discover())
+            if self.path == "/status":
+                return self._send(200, status())
             if self.path == "/job":
                 with job_lock:
                     return self._send(200, dict(job))

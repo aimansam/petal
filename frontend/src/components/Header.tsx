@@ -302,6 +302,9 @@ export function Header() {
           Graph view
         </div>
       </Link>
+      <Link to="/status">
+        <div className="bg-gray-100 text-gray-800 rounded-md px-2 py-1 whitespace-nowrap">Status</div>
+      </Link>
       <Link to="/setup">
         <div className="bg-gray-100 text-gray-800 rounded-md px-2 py-1 whitespace-nowrap">Settings</div>
       </Link>

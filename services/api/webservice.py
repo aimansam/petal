@@ -46,6 +46,7 @@ from pathlib import Path
 from data2req import convert_flow_to_http_requests, convert_single_http_requests
 from auth import init_auth
 from setup_proxy import init_setup_proxy
+from status import init_status
 from flask import request
 
 from flow2pwn import flow2pwn
@@ -56,6 +57,7 @@ application = Flask(__name__)
 init_auth(application)
 init_setup_proxy(application)
 db = database.Pool(os.environ["TIMESCALE"])
+init_status(application, db, traffic_dir, services)
 
 
 def return_json_response(object, **kwargs):

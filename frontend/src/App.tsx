@@ -11,6 +11,7 @@ import { DiffView } from "./pages/DiffView";
 import { Corrie } from "./components/Corrie";
 import { AuthGate, useAuth } from "./auth";
 import { Setup } from "./pages/Setup";
+import { Status } from "./pages/Status";
 
 function App() {
   useHotkeys('esc', () => (document.activeElement as HTMLElement).blur(), {enableOnFormTags: true});
@@ -19,6 +20,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/setup" element={<Setup />} />
+        <Route path="/status" element={<SetupFirst><Status /></SetupFirst>} />
         <Route path="/" element={<SetupFirst><Layout /></SetupFirst>}>
           <Route index element={<Home />} />
           <Route

@@ -5,6 +5,7 @@ Petal is a flow analyzer for Attack / Defence CTF competitions, ready to run on 
 Petal is based on [Tulip](https://github.com/OpenAttackDefenseTools/tulip) (see [Credits](#credits)) and adds:
 * `install.sh`: one script to install, update, build and run it; the rest is set up in the browser
 * Team password login, and a setup / Settings page in the dashboard (services, capture, VPN range, game)
+* Status page: capture health (last packet, imports), flows per service, container states, current settings
 * Capture container: rotating `tcpdump` on one or more interfaces, flows appear ~1 minute after traffic stops
 * Services running in Docker on the box are picked from a list and resolved to their container IP:port and
   every Docker network they use (traffic through tunnels and reverse proxies is captured too)
@@ -53,7 +54,8 @@ git clone https://github.com/aimansam/petal.git && cd petal
 otherwise it generates one and prints it once), builds and starts everything. Then open the printed URL, log in
 and use the setup page: pick the services to watch from the running containers, check the network, VPN range and
 game settings, and apply. The same page is **Settings** in the dashboard header later on (including a password
-change). Applying is done by a small `setup` helper container; it has Docker access but no network port, and the
+change). The **Status** page shows whether capture and imports are working, flows per service in the last
+hour and the state of every container. Applying is done by a small `setup` helper container; it has Docker access but no network port, and the
 dashboard can only reach it through the API's logged-in `/setup/*` routes.
 
 A `capture` container runs `tcpdump` on the host and rotates pcaps into `./traffic`, which Petal imports automatically.
