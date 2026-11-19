@@ -357,7 +357,7 @@ export function Setup() {
         {configured && (
           <Section
             title="Tag rules"
-            hint="Every new flow that matches gets the tag. 'tag = regex' matches what the client sent, 'tag @out = regex' what the service answered. Go/RE2 regex, (?i) ignores case, # starts a comment. Add a rule when you spot an exploit to see every later attempt."
+            hint="Every new flow that matches gets the tag. 'tag = regex' matches what the client sent, 'tag @out = regex' what the service answered, '@bin' matches raw bytes (binary services: \\x90 = byte 0x90). Go/RE2 regex, (?i) ignores case, # starts a comment. Add a rule when you spot an exploit to see every later attempt."
           >
             {rules === null ? (
               <p className="text-sm text-gray-500">Loading…</p>

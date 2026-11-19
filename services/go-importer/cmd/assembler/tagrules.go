@@ -29,10 +29,11 @@ var tagRulesPath = flag.String("tag-rules", "", "Tag rules file ('tag = regex' p
 type tagRule struct {
 	tag string
 	out bool // match server -> client data instead of client -> server
+	bin bool // match raw bytes: \x90 is the byte 0x90 (data is read as Latin-1, not UTF-8)
 	re  *regexp.Regexp
 }
 
-var tagRuleLine = regexp.MustCompile(`^([a-z0-9_-]{1,40})(\s+@out)?\s*=\s*(.+?)\s*$`)
+var tagRuleLine = regexp.MustCompile(`^([a-z0-9_-]{1,40})((?:\s+@(?:out|bin))*)\s*=\s*(.+?)\s*$`)
 
 // ParseTagRules returns the valid rules and one message per invalid line (those are skipped).
 func ParseTagRules(text string) ([]tagRule, []string) {
@@ -45,7 +46,7 @@ func ParseTagRules(text string) ([]tagRule, []string) {
 		}
 		m := tagRuleLine.FindStringSubmatch(line)
 		if m == nil {
-			errs = append(errs, "line "+strconv.Itoa(n+1)+": expected 'tag = regex' (tag: a-z 0-9 _ -)")
+			errs = append(errs, "line "+strconv.Itoa(n+1)+": expected 'tag [@out] [@bin] = regex' (tag: a-z 0-9 _ -)")
 			continue
 		}
 		re, err := regexp.Compile(m[3])
@@ -53,7 +54,7 @@ func ParseTagRules(text string) ([]tagRule, []string) {
 			errs = append(errs, "line "+strconv.Itoa(n+1)+": "+err.Error())
 			continue
 		}
-		rules = append(rules, tagRule{tag: m[1], out: m[2] != "", re: re})
+		rules = append(rules, tagRule{tag: m[1], out: strings.Contains(m[2], "@out"), bin: strings.Contains(m[2], "@bin"), re: re})
 	}
 	return rules, errs
 }
@@ -122,28 +123,62 @@ func ApplyTagRules(flow *db.FlowEntry, rules []tagRule) {
 			variants[i] = decodedVariants(flow.Flow[i].Data)
 		}
 	}
+	// Latin-1 views (one rune per byte) for @bin rules, built only when needed
+	latin := make([][]string, len(flow.Flow))
+	latinOf := func(i int) []string {
+		if latin[i] == nil {
+			views := []string{latin1(flow.Flow[i].Data)}
+			for _, v := range variants[i] {
+				views = append(views, latin1(v))
+			}
+			latin[i] = views
+		}
+		return latin[i]
+	}
 	for _, r := range rules {
 		if contains(flow.Tags, r.tag) {
 			continue
 		}
-	items:
 		for i := range flow.Flow {
 			item := &flow.Flow[i]
 			if (item.From == "s") != r.out {
 				continue
 			}
-			if r.re.Match(item.Data) {
+			if ruleMatches(r, item.Data, variants[i], func() []string { return latinOf(i) }) {
 				flow.Tags = append(flow.Tags, r.tag)
 				break
 			}
-			for _, v := range variants[i] {
-				if r.re.Match(v) {
-					flow.Tags = append(flow.Tags, r.tag)
-					break items
-				}
-			}
 		}
 	}
+}
+
+func ruleMatches(r tagRule, data []byte, variants [][]byte, latinViews func() []string) bool {
+	if r.bin {
+		for _, v := range latinViews() {
+			if r.re.MatchString(v) {
+				return true
+			}
+		}
+		return false
+	}
+	if r.re.Match(data) {
+		return true
+	}
+	for _, v := range variants {
+		if r.re.Match(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// latin1 maps every byte to the rune with the same value, so a regex can match raw binary data.
+func latin1(b []byte) string {
+	runes := make([]rune, len(b))
+	for i, c := range b {
+		runes[i] = rune(c)
+	}
+	return string(runes)
 }
 
 const (
@@ -171,6 +206,9 @@ func decodedVariants(data []byte) [][]byte {
 		if j := jsonUnescape(b); j != nil {
 			add(j)
 		}
+		if x := hexEscapes(b); x != nil {
+			add(x)
+		}
 		if u := urlDecode(b); u != nil && add(u) {
 			if u2 := urlDecode(u); u2 != nil {
 				add(u2)
@@ -179,8 +217,10 @@ func decodedVariants(data []byte) [][]byte {
 	}
 
 	sources := [][]byte{data}
-	if g := gunzipBody(data); g != nil && add(g) {
-		sources = append(sources, g)
+	for _, body := range httpBodies(data) {
+		if add(body) {
+			sources = append(sources, body)
+		}
 	}
 	for _, src := range sources {
 		textual(src)
@@ -189,6 +229,11 @@ func decodedVariants(data []byte) [][]byte {
 	scan = append(scan, out...)
 	for _, b := range scan {
 		for _, dec := range base64Texts(b) {
+			if add(dec) {
+				textual(dec)
+			}
+		}
+		for _, dec := range hexTexts(b) {
 			if add(dec) {
 				textual(dec)
 			}
@@ -349,20 +394,31 @@ func mostlyText(b []byte) bool {
 	return printable*10 >= len(b)*9
 }
 
-// gunzipBody decompresses the body of an HTTP request sent with Content-Encoding gzip/deflate (or
-// starting with the gzip magic bytes). Returns nil if there is nothing to decompress.
-func gunzipBody(data []byte) []byte {
+// httpBodies returns decoded forms of an HTTP message body: de-chunked (Transfer-Encoding: chunked,
+// which can also be used to split a payload across chunks) and decompressed (Content-Encoding gzip /
+// deflate, or a body starting with the gzip magic). Returns nil when there is nothing to decode.
+func httpBodies(data []byte) [][]byte {
 	i := bytes.Index(data, []byte("\r\n\r\n"))
 	if i < 0 || len(data) < i+6 {
 		return nil
 	}
 	head, body := bytes.ToLower(data[:i]), data[i+4:]
+	var out [][]byte
+	if bytes.Contains(head, []byte("transfer-encoding: chunked")) {
+		if d := dechunk(body); d != nil {
+			out = append(out, d)
+			body = d
+		}
+	}
+	if len(body) < 2 {
+		return out
+	}
 	var r io.Reader
 	switch {
 	case bytes.Contains(head, []byte("content-encoding: gzip")) || (body[0] == 0x1f && body[1] == 0x8b):
 		gz, err := gzip.NewReader(bytes.NewReader(body))
 		if err != nil {
-			return nil
+			return out
 		}
 		r = gz
 	case bytes.Contains(head, []byte("content-encoding: deflate")):
@@ -372,10 +428,83 @@ func gunzipBody(data []byte) []byte {
 			r = flate.NewReader(bytes.NewReader(body))
 		}
 	default:
+		return out
+	}
+	dec, _ := io.ReadAll(io.LimitReader(r, maxGunzipBytes)) // a truncated stream still gives its data
+	if len(dec) > 0 {
+		out = append(out, dec)
+	}
+	return out
+}
+
+// dechunk joins the chunks of a chunked HTTP body ("<hex size>[;ext]\r\n<data>\r\n" ... "0\r\n").
+// Returns nil if the body is not valid chunked encoding.
+func dechunk(body []byte) []byte {
+	var out []byte
+	for len(body) > 0 {
+		nl := bytes.Index(body, []byte("\r\n"))
+		if nl < 0 {
+			return nil
+		}
+		sizeField := bytes.TrimSpace(bytes.SplitN(body[:nl], []byte(";"), 2)[0])
+		size, err := strconv.ParseUint(string(sizeField), 16, 32)
+		if err != nil {
+			return nil
+		}
+		body = body[nl+2:]
+		if size == 0 {
+			return out
+		}
+		if uint64(len(body)) < size {
+			return append(out, body...) // capture cut mid-chunk: keep what we have
+		}
+		out = append(out, body[:size]...)
+		body = bytes.TrimPrefix(body[size:], []byte("\r\n"))
+		if len(out) > maxGunzipBytes {
+			return out
+		}
+	}
+	return out
+}
+
+var hexToken = regexp.MustCompile(`(?:[0-9a-fA-F]{2}){8,}`)
+
+// hexTexts decodes long hex strings (e.g. ?x=2e2e2f2e2e2f657463) that turn out to be readable text.
+func hexTexts(data []byte) [][]byte {
+	if len(data) > maxScanBytes {
+		data = data[:maxScanBytes]
+	}
+	var out [][]byte
+	for _, tok := range hexToken.FindAll(data, maxB64Tokens) {
+		dec := make([]byte, len(tok)/2)
+		for i := range dec {
+			dec[i] = unhex(tok[2*i])<<4 | unhex(tok[2*i+1])
+		}
+		if mostlyText(dec) {
+			out = append(out, dec)
+		}
+	}
+	return out
+}
+
+// hexEscapes decodes "\xNN" escapes written as text (e.g. a Python payload "\x90\x90\x31\xc0") into the
+// raw bytes, so @bin rules see the real shellcode. Needs at least 4 escapes; nil otherwise.
+func hexEscapes(data []byte) []byte {
+	if bytes.Count(data, []byte("\\x")) < 4 {
 		return nil
 	}
-	out, _ := io.ReadAll(io.LimitReader(r, maxGunzipBytes)) // a truncated stream still gives its data
-	if len(out) == 0 {
+	out := make([]byte, 0, len(data))
+	n := 0
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\\' && i+3 < len(data) && (data[i+1] == 'x' || data[i+1] == 'X') && isHex(data[i+2]) && isHex(data[i+3]) {
+			out = append(out, unhex(data[i+2])<<4|unhex(data[i+3]))
+			i += 3
+			n++
+			continue
+		}
+		out = append(out, data[i])
+	}
+	if n < 4 {
 		return nil
 	}
 	return out

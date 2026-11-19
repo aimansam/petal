@@ -212,7 +212,7 @@ def status():
 
 
 RULES_FILE = os.path.join(HOME, "rules", "tag-rules.conf")
-RULE_LINE = re.compile(r"^([a-z0-9_-]{1,40})(\s+@out)?\s*=\s*(.+?)\s*$")
+RULE_LINE = re.compile(r"^([a-z0-9_-]{1,40})((?:\s+@(?:out|bin))*)\s*=\s*(.+?)\s*$")
 # Go's RE2 has no lookaround or backreferences: reject them here instead of silently skipping.
 RE2_UNSUPPORTED = re.compile(r"\(\?(=|!|<=|<!)|\\[1-9]")
 
@@ -236,7 +236,7 @@ def save_rules(text):
             continue
         m = RULE_LINE.match(line)
         if not m:
-            raise ValueError(f"line {n}: expected 'tag = regex' or 'tag @out = regex' (tag: a-z 0-9 _ -, max 40)")
+            raise ValueError(f"line {n}: expected 'tag [@out] [@bin] = regex' (tag: a-z 0-9 _ -, max 40)")
         if RE2_UNSUPPORTED.search(m.group(3)):
             raise ValueError(f"line {n}: lookarounds and backreferences are not supported (Go/RE2 regex)")
         try:

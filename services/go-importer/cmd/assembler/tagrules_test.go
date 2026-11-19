@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -218,4 +219,94 @@ func TestRulesMatchEncodedPayloads(t *testing.T) {
 // url64 percent-encodes "=" and "+" like a browser form would, to also exercise URL-then-base64 decoding.
 func url64(s string) string {
 	return strings.NewReplacer("=", "%3D", "+", "%2B", "/", "%2F").Replace(s)
+}
+
+func rep(b byte, n int) string { return string(bytes.Repeat([]byte{b}, n)) }
+
+func le64(v uint64) string {
+	b := make([]byte, 8)
+	for i := range b {
+		b[i] = byte(v >> (8 * i))
+	}
+	return string(b)
+}
+
+func TestBinaryRules(t *testing.T) {
+	data, err := os.ReadFile("../../../../rules/tag-rules.default.conf")
+	if err != nil {
+		t.Skip("default rules file not found:", err)
+	}
+	rules, errs := ParseTagRules(string(data))
+	if len(errs) > 0 {
+		t.Fatalf("default rules: %v", errs)
+	}
+	shell64 := string([]byte{0x48, 0x31, 0xf6, 0x56, 0x48, 0xbf, 0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x2f, 0x73, 0x68, 0x57, 0x54, 0x5f, 0x6a, 0x3b, 0x58, 0x99, 0x0f, 0x05})
+	bs := string(rune(92))
+	escaped := strings.Repeat(bs+"x90", 20) // "\x90\x90..." written as text, e.g. in a python exploit
+	rop := "name\n" + rep('A', 40) + le64(0x401236) + le64(0x7ffff7a4f2c3) + le64(0x7ffff7b97e9a) + le64(0x7ffff7a33440) + le64(0x7ffff7a52390)
+	cases := map[string][]string{
+		rep(0x90, 32) + shell64 + "\n":             {"nop-sled", "shellcode"},
+		"payload = b'" + escaped + "'\n":           {"nop-sled"},
+		"%p.%p.%p.%p.%p\n":                         {"format-string"},
+		"AAAA%7$n\n":                               {"format-string"},
+		rep('A', 200) + "\n":                       {"overflow-pattern"},
+		"aaaabaaacaaadaaaeaaafaaagaaa\n":           {"overflow-pattern"},
+		rop:                                        {"rop-chain"},
+		"LOGIN team7 hunter2\nGET flag 13\nQUIT\n": {},
+		"GET /search?q=hello%20see%20the%20sun%20set%20x%20now HTTP/1.1\r\n":              {},
+		"printf leak %08x.%08x.%016lx.%p\n":                                               {"format-string"},
+		string([]byte{0x00, 0x01, 0x02, 0x10, 0x7f, 0xff, 0x00, 0x00, 0x13, 0x37}) + "\n": {},
+	}
+	for in, want := range cases {
+		f := flowWith(in, "OK\n")
+		ApplyTagRules(f, rules)
+		for _, w := range want {
+			if !contains(f.Tags, w) {
+				t.Errorf("%q: got %v, want %s", in, f.Tags, w)
+			}
+		}
+		if len(want) == 0 && len(f.Tags) != 0 {
+			t.Errorf("false positive on %q: %v", in, f.Tags)
+		}
+	}
+}
+
+func TestBinRuleIsBytewise(t *testing.T) {
+	rules, errs := ParseTagRules("hi @bin = " + string(rune(92)) + "xff" + string(rune(92)) + "xfe\nboth @out @bin = " + string(rune(92)) + "x00{4}")
+	if len(errs) != 0 || len(rules) != 2 || !rules[0].bin || rules[0].out || !rules[1].bin || !rules[1].out {
+		t.Fatalf("parse: %+v %v", rules, errs)
+	}
+	f := flowWith(string([]byte{'x', 0xff, 0xfe, 'y'}), string([]byte{1, 0, 0, 0, 0, 2}))
+	ApplyTagRules(f, rules)
+	if !contains(f.Tags, "hi") || !contains(f.Tags, "both") {
+		t.Errorf("got %v", f.Tags)
+	}
+	// without @bin, invalid UTF-8 bytes never match \xff (Go reads the data as UTF-8)
+	plain, _ := ParseTagRules("hi = " + string(rune(92)) + "xff")
+	g := flowWith(string([]byte{0xff}), "")
+	ApplyTagRules(g, plain)
+	if len(g.Tags) != 0 {
+		t.Errorf("plain rule unexpectedly matched raw byte: %v", g.Tags)
+	}
+}
+
+func TestChunkedAndHex(t *testing.T) {
+	data, _ := os.ReadFile("../../../../rules/tag-rules.default.conf")
+	rules, _ := ParseTagRules(string(data))
+	chunked := "POST /q HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nq=1 \r\n3\r\nUNI\r\n9\r\nON SELECT\r\n5\r\n flag\r\n0\r\n\r\n"
+	gz := gzipped("q=1 UNION SELECT flag")
+	chunkedGzip := "POST /q HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Encoding: gzip\r\n\r\n" +
+		strconv.FormatInt(int64(len(gz[:10])), 16) + "\r\n" + gz[:10] + "\r\n" +
+		strconv.FormatInt(int64(len(gz[10:])), 16) + "\r\n" + gz[10:] + "\r\n0\r\n\r\n"
+	hexed := "GET /f?x=2e2e2f2e2e2f2e2e2f6574632f706173737764 HTTP/1.1\r\n\r\n"
+	for req, want := range map[string]string{chunked: "sqli", chunkedGzip: "sqli", hexed: "path-traversal"} {
+		f := flowWith(req, "HTTP/1.1 200 OK")
+		ApplyTagRules(f, rules)
+		if !contains(f.Tags, want) {
+			t.Errorf("%q: got %v, want %s", req, f.Tags, want)
+		}
+	}
+	if d := dechunk([]byte("zz\r\nnope")); d != nil {
+		t.Errorf("invalid chunked body must give nil, got %q", d)
+	}
 }

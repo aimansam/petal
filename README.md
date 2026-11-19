@@ -114,13 +114,17 @@ seconds, no restart). One rule per line:
 ```
 sqli = (?i)union(\s|%20|\+)+select        # what the client sent
 leak-passwd @out = root:x:0:0:           # what the service answered
+nop-sled @bin = \x90{16,}                 # raw bytes (binary / pwn services)
 recipe-sqli = /search\?q=.*union          # an exploit you just spotted
 ```
-Tags use `a-z 0-9 _ -`, regexes are Go/RE2 (`(?i)` ignores case). Rules see the whole request (headers and
+Tags use `a-z 0-9 _ -`, regexes are Go/RE2 (`(?i)` ignores case). `@bin` rules match raw bytes (`\x90` is the byte
+0x90, `(?s)` lets `.` match any byte) for binary protocols; `@out` and `@bin` can be combined. Rules see the whole request (headers and
 body, also POST/JSON/multipart), as sent and decoded: JSON escapes, URL encoding (also double), base64 /
-base64url values that decode to text, and gzip/deflate request bodies. So `"127.0.0.1\u003bcat /flag"`, `?data=<base64>`
+base64url and hex values that decode to text, `\xNN` escapes written as text, chunked and gzip/deflate
+request bodies. So `"127.0.0.1\u003bcat /flag"`, `?data=<base64>`
 or `%252e%252e%252f` hit the same rule as the plain payload; the stored flow is unchanged. Starter rules for SQL injection, path
-traversal, command and template injection, XSS and `/etc/passwd` leaks ship in
+traversal, command and template injection, XSS, `/etc/passwd` leaks and pwn payloads (NOP sleds, execve
+shellcode, format strings, overflow/cyclic patterns, ROP chains) ship in
 `rules/tag-rules.default.conf`. Tip: when you find an exploit in the traffic, add a rule for it to see every
 later attempt, who sends it and whether your patch holds.
 
